@@ -10,12 +10,11 @@ Created on 24/3/2011
 
 @author: peter
 """
-import re, sys, os, glob, logging, optparse, copy, time
-import dateutil.parser
+import re, sys 
 import numpy as np
 import pandas as pd
-from pandas import DataFrame, Series, Timestamp
-from datetime import datetime, timedelta
+from pandas import DataFrame, Series, Timestamp, DateOffset
+
 
 KEY_TIMESTAMP = 'timestamp'
 KEY_LEVEL = 'level'
@@ -23,26 +22,29 @@ KEY_CONTENT = 'content'
 KEY_THREAD = 'thread'
 ENTRY_KEYS = [KEY_TIMESTAMP, KEY_LEVEL, KEY_CONTENT, KEY_THREAD]
 
-pattern_log_line = r'(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(,\d{0,3}){0,1})\s+(?P<level>ERROR|INFO|DEBUG)\s+(?P<content>.*)\s\[(?P<thread>.+?)\]'
-RE_LOG_LINE = re.compile(pattern_log_line, re.IGNORECASE|re.DOTALL)
+pattern_log_line = r'''
+    (?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(,\d{0,3})?)
+    \s+
+    (?P<level>ERROR|INFO|DEBUG)
+    \s+
+    (?P<file>\w+)
+    :
+    (?P<line>\d+)
+    \s+
+    (?P<content>.*)
+    \s*
+    \[(?P<thread>.+?)\]
+'''
+
+ENTRY_KEYS = re.findall(r'\?P<(\w+)>', pattern_log_line)
+RE_LOG_LINE = re.compile(pattern_log_line, re.IGNORECASE|re.DOTALL|re.VERBOSE)
 
 def parse_timestamp(timestamp):
-    parts = timestamp.split(',')
-    dt = dateutil.parser.parse(parts[0])
-    if len(parts) > 1:
-        ms = int(parts[1])
-        dt += timedelta(milliseconds=ms)
-    return dt
-
-def parse_timestamp(timestamp):
-    parts = timestamp.split(',')
-    dt = Timestamp(parts[0])
-    if len(parts) > 1:
-        ms = int(parts[1])
-        delta = pd.DateOffset(microseconds=ms*1000)
-        #np.timedelta64(ms, 'ms')
-        dt += delta
-    return dt
+    """Convert a string of the form 2011-03-10 15:10:34,687
+      to a pandas TimeStamp
+    """
+    dt, ms = timestamp.split(',')
+    return Timestamp(dt) + DateOffset(microseconds=int(ms)*1000)
     
     
 if False:    
@@ -69,44 +71,53 @@ def decode_log_line(line):
             print ts
             raise
             
+    
     return [
         parse_timestamp(d.get('timestamp', '')),
         d.get('level'),
+        d.get('file'),
+        int(d.get('line', '-1')),
         d.get('content'),
         d.get('thread')
-    ]    
-    
-    # m.groupdict().get(k) for k in ENTRY_KEYS]
+    ] 
     
 def get_entries(log_file):
+    """Generator that returns log entries for each line in log_file that matches
+        RE_LOG_LINE
+    """    
     with open(log_file, 'rt') as f:
-        for line in f:
+        for i,line in enumerate(f):
             e = decode_log_line(line)
             if e:
-                yield e
+                yield [log_file,i] + e
             
 def log_file_to_df(log_file):
-    entries = [e for e in get_entries(log_file) if e]
+    # Why can't we pass a generator to DataFrame()?
+    #entries = get_entries(log_file)
+    entries = [e for e in get_entries(log_file)]
     assert all(len(e) == len(entries[0]) for e in entries)
-    return DataFrame(entries, columns = ENTRY_KEYS)
-            
+    return DataFrame(entries, columns = ['logfile', 'logline'] + ENTRY_KEYS)
+
+def make_timestamps_unique(df):
+    """Make all the timestamps in DataFrame df unique by making each
+        timestamp at least 1 us greater than timestamp of preceeding row
+    """
+    last = df.ix[0, 'timestamp']
+    for i in range(1, len(df)):
+        if df.ix[i,'timestamp'] <= last:
+            df.ix[i,'timestamp'] = last + DateOffset(microseconds=1)
+        last = df.ix[i,'timestamp']
+    
 df = log_file_to_df('server.log')
+make_timestamps_unique(df)
+
 print df
 print df.head()
 print df.iloc[0]
 
-# Make timestamps unique
-last = datetime(year=1900,month=1,day=1)
-for i in range(len(df)):
-    #print df.iloc[i]
-    if df.ix[i,'timestamp'] <= last:
-        df.ix[i,'timestamp'] = last + pd.DateOffset(microseconds=1)
-        print df.ix[i, 'timestamp']
-    last = df.ix[i,'timestamp']
-
 ts = df['timestamp']
-last = datetime(year=1900,month=1,day=1)
-for x in ts:
+last = ts[0]
+for x in ts[1:]:
     assert x > last, '\n\t%s\n\t%s' % (last, x)
     last = x
     
@@ -117,3 +128,7 @@ print errors.head()
 print '-' * 40
 print errors.irow(1)
     
+print    
+print df.timestamp.min()
+print df.timestamp.max()    
+print df.timestamp.max() - df.timestamp.min()
