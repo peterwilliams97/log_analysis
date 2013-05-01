@@ -110,12 +110,13 @@ def make_timestamps_unique(df):
     
 df = log_file_to_df('server.log')
 make_timestamps_unique(df)
+df = df.set_index('timestamp')
 
 print df
 print df.head()
 print df.iloc[0]
 
-ts = df['timestamp']
+ts = df.index #['timestamp']
 last = ts[0]
 for x in ts[1:]:
     assert x > last, '\n\t%s\n\t%s' % (last, x)
@@ -129,6 +130,10 @@ print '-' * 40
 print errors.irow(1)
     
 print    
-print df.timestamp.min()
-print df.timestamp.max()    
-print df.timestamp.max() - df.timestamp.min()
+print df.index.min()
+print df.index.max()    
+print df.index.max() - df.index.min()
+
+
+# pd.DataFrame.hist(df)
+
