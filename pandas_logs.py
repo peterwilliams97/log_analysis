@@ -118,7 +118,7 @@ def print_row(df, ts):
     eix = df.ix
     msg = '%s:%d - %s' % (eix[ts, 'file'], eix[ts, 'line'], eix[ts, 'content'])
     #print '%-30s %-20s %10s %s' % (ts, eix[ts, 'logfile'], eix[ts, 'logline'], msg[:60])
-    print ('%s %-5s %s' % (ts,  eix[ts, 'level'], msg))[:160]
+    print ('%s %-5s %s [%s]' % (ts,  eix[ts, 'level'], msg, eix[ts, 'thread']))[:160]
 
 def test():    
     df = load_log(r'server\server.log')
