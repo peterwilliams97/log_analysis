@@ -9,13 +9,21 @@ import re, sys, glob
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series, Timestamp, DateOffset
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 
 def versions():
     print '-' * 60
     print 'VERSIONS'
-    print sys.version
-    print 'numpy', np.__version__
-    print 'pandas', pd.__version__
+    print '-' * 60
+    print 'python:', sys.version
+    print 'numpy:', np.__version__
+    print 'matplotlib:', mpl.__version__
+    print 'pandas:', pd.__version__
+    print '-' * 60
+    
+versions()  
+  
 
 def parse_timestamp(timestamp):
     """Convert a string of the form 2011-03-10 15:10:34,687
@@ -39,6 +47,8 @@ PATTERN_LOG_LINE = r'''
     (?P<file>\w+)
     :
     (?P<line>\d+)
+    \s+
+    -
     \s+
     (?P<content>.*)
     \s*
@@ -85,7 +95,7 @@ def log_file_to_df(log_file):
     return df
 
 USEC = DateOffset(microseconds=1)
-    
+
 def make_timestamps_unique(df):
     """Make all the timestamps in DataFrame df unique by making each
         timestamp at least 1 µsec greater than timestamp of preceeding row
@@ -104,6 +114,11 @@ def load_log(log_file):
     df = df.set_index('timestamp')
     return df
 
+def print_row(df, ts):
+    eix = df.ix
+    msg = '%s:%d - %s' % (eix[ts, 'file'], eix[ts, 'line'], eix[ts, 'content'])
+    #print '%-30s %-20s %10s %s' % (ts, eix[ts, 'logfile'], eix[ts, 'logline'], msg[:60])
+    print ('%s %-5s %s' % (ts,  eix[ts, 'level'], msg))[:160]
 
 def test():    
     df = load_log(r'server\server.log')
@@ -133,7 +148,7 @@ def test():
 def test2():  
     #import gc
     #gc.disable
-    files = glob.glob(r'server\server.log*') # [:2]
+    files = glob.glob(r'server.log*') # [:2]
     dfs = [load_log(fn) for fn in files]
     dfs.sort(key = lambda x: x.index[0])
     for i,df in enumerate(dfs):
@@ -187,7 +202,7 @@ def test4():
        
         for ts in errors.index:
             msg = '%s:%d %s' % (eix[ts, 'file'], eix[ts, 'line'], eix[ts, 'content'])
-            print '%-30s %-20s %10s %s' % (ts, eix[ts, 'logfile'], eix[ts, 'logline'], msg[:160])
+            print '%-30s %-20s %10s %s' % (ts, eix[ts, 'logfile'], eix[ts, 'logline'], msg[:60])
             
     contents = [eix[ts, 'content'] for ts in errors.index]
 
@@ -197,8 +212,49 @@ def test4():
     print '%d unique ERROR level entries' % len(set(contents))
     print 
     for content in sorted(set(contents)):
-        print content
+        print content[:160]
     
+    
+def test5():
+    df = pd.read_hdf('server_logs.h5', 'table')    
+    
+    print df.ix['2013-04-23 09:00':'2013-04-23 7:00'].index
+    for ts in df.ix['2013-04-23 19:00':'2013-04-24 1:00'].index:
+        print_row(df, ts)
+    
+    print df.content.at_time('2013-04-23 21:00:00.014000')
 
-test4()
-#versions()
+    filtered = df.between_time('2013-04-23 19:00', '2013-04-24 1:00')    
+    print filtered
+    
+    print sorted(set(df.level))
+    error = df[df.level=='ERROR']
+    info = df[df.level=='INFO']
+    debug = df[df.level=='DEBUG']
+    
+    print len(error)
+    print len(info)
+    print len(debug)
+    print len(error) + len(info) + len(debug), len(df)
+    
+    
+    if True:
+        bars = df.logfile.resample('600min', how='count')
+        print bars.head() 
+        print len(bars), type(bars)
+        print bars.describe()
+   
+        bars_e = df[df.level=='ERROR'].logfile.resample('600min', how='count')
+        bars_i = df[df.level=='INFO'].logfile.resample('600min', how='count')
+        bars_d = df[df.level=='DEBUG'].logfile.resample('600min', how='count')
+        
+        bars.plot()
+        if True:
+            bars_e.plot()
+            bars_i.plot()
+            bars_d.plot()
+        plt.show()
+
+test5()
+
+
