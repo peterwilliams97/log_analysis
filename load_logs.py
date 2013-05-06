@@ -5,16 +5,16 @@
     Requires pandas 0.11.0 or higher
 """
 from __future__ import division
-import re, sys, glob, os 
+import re, sys, glob, os, time 
 import numpy as np
 import pandas as pd
-from pandas import DataFrame, Series, Timestamp, DateOffset
+from pandas import DataFrame, Series, Timestamp, DateOffset, HDFStore
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import cPickle as pickle
+
 
 def versions():
-    print '-' * 60
-    print 'VERSIONS'
     print '-' * 60
     print 'python:', sys.version
     print 'numpy:', np.__version__
@@ -23,7 +23,20 @@ def versions():
     print '-' * 60
     
 versions()  
-  
+
+
+def save_object(path, obj):
+    """Save obj to path"""
+    pickle.dump(obj, open(path, 'wb'))
+    
+
+def load_object(path, default=None):
+    """Load object from path"""
+    try:
+        return pickle.load(open(path, 'rb'))
+    except:
+        return default
+
 
 def parse_timestamp(timestamp):
     """Convert a string of the form 2011-03-10 15:10:34,687
@@ -72,11 +85,11 @@ def decode_log_line(line):
         d.get('level'),
         d.get('file'),
         int(d.get('line', '-1')),
-        d.get('content'),
+        d.get('content', '[EMPTY]')[:256],
         d.get('thread')
     ] 
 
-    
+
 def get_entries(log_file):
     """Generator 
         Returns decoded log entries for all well-formed log entries in a log file"""
@@ -91,9 +104,10 @@ def log_file_to_df(log_file):
     """Returns a pandas dataframe whose rows are the decoded entries of the lines in log_file"""
     # Why can't we construct a DataFrame with a generator?
     entries = [e for e in get_entries(log_file)]
-    df = DataFrame(entries, columns = [ENTRY_KEYS)
+    df = DataFrame(entries, columns = ENTRY_KEYS)
     del entries
     return df
+
 
 USEC = DateOffset(microseconds=1)
 
@@ -104,62 +118,91 @@ def make_timestamps_unique(df):
     for i in range(1, len(df)):
         if df.ix[i,'timestamp'] <= df.ix[i-1,'timestamp']:
             df.ix[i,'timestamp'] = df.ix[i-1,'timestamp'] + USEC
-            
+
 
 def load_log(log_path):
     """Return a pandas DataFrame for all the valid log entry lines in log_file
         The index of the DataFrame are the uniqufied timestamps of the log entries
     """
-    print 'load_log(%s)' % log_file
-    df = log_file_to_df(log_file)
+    print 'load_log(%s)' % log_path
+    df = log_file_to_df(log_path)
     make_timestamps_unique(df)
     df = df.set_index('timestamp')
     return df
 
-
-def log_to_hdf(log_path, hdf_path):
-    """Return a pandas DataFrame for all the valid log entry lines in log_file
-        The index of the DataFrame are the uniqufied timestamps of the log entries
-    """
-    if os.exists(hdf_path):
-        return
-    df = load_log(log_path)
-    df.to_hdf(hdf_path, 'table')
-
     
-def load_log_pattern(path_pattern):  
+class HdfStore:
+
+    def __init__(self, store_path):
+        self.store = HDFStore(store_path)
+        #self.store['logs'] = {}
+        #self.store['history'] = {}
+
+    def save_log(self, log_path):
+        """Return a pandas DataFrame for all the valid log entry lines in log_file
+            The index of the DataFrame are the uniqufied timestamps of the log entries
+        """
+        history = load_object('temp.pkl', {})
+        if log_path in history:
+            return
+        
+        print 'Processing %s' % log_path,
+        start = time.time()
+        df = load_log(log_path)
+        self.store.append('logs', df)
+        load_time = time.time() - start
+        
+        history[log_path] = {
+            'start': df.index[0],
+            'end': df.index[-1],
+            'load_time': load_time
+        }
+        save_object('temp.pkl', history)
+        del df
+        history[log_path]
+
+    def get_log_paths(self):
+        history = load_object('temp.pkl', {})
+        sorted_keys = history.keys()
+        print history
+        print type(sorted_keys)
+        sorted_keys.sort(key=lambda k: history[k]['start'])
+        return [(k,history[k]) for k in sorted_keys]
+ 
+
+def load_log_pattern(hdf_path, path_pattern):  
+    
     path_list = glob.glob(path_pattern) 
-    df_list = [load_log(path) for path in path_list]
-    df_list.sort(key = lambda x: x.index[0])
-    for i,df in enumerate(df_list):
-        print '%2d: %s  ---  %s' % (i, df.index[0], df.index[-1])
-
-    df_all = pd.concat(df_list)
-    for df in df_list:
-        print len(df)
-    print sum(len(df) for df in df_list), len(df_all)
-    print df_all
-
-    for i in range(1, len(df_list)):
-        dfs0 = df_list[i-1]
-        dfs1 = df_list[i]    
-        assert dfs0.index[-1] < dfs1.index[0], '\n%s\n%s' % (dfs0, dfs1)
-        
-    return df_all
-
-HDF_FILE = 'pc_pandas_big.h5'  
+    print path_list
+    if not path_list:
+        return
     
-def logs_to_hdf(path_pattern, table):
-    try:
-         os.remove(HDF_FILE)
-    except:
-        pass
-        
-    df_all = load_log_pattern(path_pattern)
-    df_all.to_hdf(HDF_FILE, table, append=False)
+    hdf_store = HdfStore('temp.h5')
+    for path in path_list:
+        hdf_store.save_log(path)
     
+    log_history = hdf_store.get_log_paths() 
+    for i,(path,history) in enumerate(log_history[:1]):
+        print '%2d: %s  ---  %s : %s' % (i, history['start'], history['end'], path)
 
-name = sys.argv[1]  
+    p0,h0 = log_history[0]
+    for p1,h1 in log_history[1:]:
+        assert h0['end'] < h1['start'], '\n%s %s\n%s %s' % (p0,h0, p1,h1)
+    
+    paths = [p for p,_ in log_history]
+        
+    final_store = HDFStore(hdf_path)
+    print
+    print hdf_store.store.keys()
+    print type(hdf_store.store['logs'])
+    print type(hdf_store.store.logs)
+   
+    final_store.put(hdf_store.logs[paths[0]])
+    for path in paths[1:]:
+        final_store.append(hdf_store.log[path])
+
+
+hdf_path = sys.argv[1]  
 path_pattern = sys.argv[2]   
-logs_to_hdf(path_pattern, name)
+load_log_pattern(hdf_path, path_pattern)
 
