@@ -144,7 +144,8 @@ class LogSaver:
         sgn = 'n' if hsh < 0 else 'p'
         temp = 'temp_%s%08X' % (sgn, abs(hsh))
         self.progress_store_path = '%s.h5' % temp
-        self.progress_history = '%s.pkl' % temp
+        self.history_path = '%s.pkl' % temp
+        self.history = load_object(self.history_path, {})
 
     def __repr__(self):
         return '\n'.join('%s: %s' % (k,v) for k,v in self.__dict__.items())
@@ -154,10 +155,10 @@ class LogSaver:
         if os.path.exists(self.store_path):
             return
         if not force:
-            assert not os.path.exists(self.progress_history), '''
+            assert not os.path.exists(self.history_path), '''
                 %s exists but %s does not
                 There appears to be a partical conversion
-            ''' % (self.progress_history, self.store_path)
+            ''' % (self.history_path, self.store_path)
             
         self.progress_store = HDFStore(self.progress_store_path)
         for log_path in self.log_list:
@@ -168,15 +169,12 @@ class LogSaver:
         print self.progress_store.keys()
         print '----'
         
-        final_store = HDFStore(self.store_path)
-            
-        for i,path in enumerate(self.log_list):
-            log = self.progress_store.get(LogSaver.normalize(path))
-            if i == 0:
-                final_store.put('logs', log)
-            else:
-                final_store.append('logs', log)
+        df_list = [self.progress_store.get(LogSaver.normalize(path)) for path in self.log_list]     
         self.progress_store.close()
+        
+        df_all = pd.concat(df_list)
+        final_store = HDFStore(self.store_path)
+        final_store.put('logs', df_all)
         final_store.close()
 
     def test_store(self):    
@@ -192,33 +190,34 @@ class LogSaver:
 
     def cleanup(self):    
         os.remove(self.progress_store_path)
-        os.remove(self.progress_history)
+        os.remove(self.history_path)
 
     def save_log(self, path):
         """Return a pandas DataFrame for all the valid log entry lines in log_file
             The index of the DataFrame are the uniqufied timestamps of the log entries
         """
-        history = load_object(self.progress_history, {})
-        if path in history:
+        if path in self.history:
             return
         
-        #print 'Processing %s' % path,
+        print 'Processing %s' % path,
         start = time.time()
         df = load_log(path)
         self.progress_store.put(LogSaver.normalize(path), df)
         load_time = time.time() - start
         
-        history[path] = {
+        self.history[path] = {
             'start': df.index[0],
             'end': df.index[-1],
-            'load_time': load_time
+            'load_time': int(load_time),
+            'num': len(df)
         }
-        save_object(self.progress_history, history)
+        save_object(self.history_path, self.history)
         del df
-        print history[path]
+        print self.history[path],
+        print '%d of %d' % (len(self.history), len(self.log_list))
         
     def check(self):
-        history = load_object(self.progress_history, {})
+        history = load_object(self.history_path, {})
         sorted_keys = history.keys()
         sorted_keys.sort(key=lambda k: history[k]['start'])
         for i,path in enumerate(sorted_keys):
