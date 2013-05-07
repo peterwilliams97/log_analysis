@@ -165,17 +165,21 @@ class LogSaver:
             self.save_log(log_path)
         
         self.check()    
-        print '----'
+        print '--------'
+        print 'All tables in %s' % self.progress_store_path
         print self.progress_store.keys()
-        print '----'
+        print '--------'
         
         df_list = [self.progress_store.get(LogSaver.normalize(path)) for path in self.log_list]     
         self.progress_store.close()
+        print 'Closed %s' % self.progress_store_path
         
         df_all = pd.concat(df_list)
+        print 'Final list has %d entries' % len(df_all)
         final_store = HDFStore(self.store_path)
         final_store.put('logs', df_all)
         final_store.close()
+        print 'Closed %s' % self.store_path
 
     def test_store(self):    
         final_store = HDFStore(self.store_path)
@@ -220,6 +224,8 @@ class LogSaver:
         history = load_object(self.history_path, {})
         sorted_keys = history.keys()
         sorted_keys.sort(key=lambda k: history[k]['start'])
+        print '-' * 80
+        print 'Time range by log file'
         for i,path in enumerate(sorted_keys):
             hist = history[path]
             print '%2d: %s  ---  %s : %s' % (i, hist['start'], hist['end'], path)
