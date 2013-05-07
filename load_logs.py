@@ -124,85 +124,134 @@ def load_log(log_path):
     """Return a pandas DataFrame for all the valid log entry lines in log_file
         The index of the DataFrame are the uniqufied timestamps of the log entries
     """
-    print 'load_log(%s)' % log_path
+    #print 'load_log(%s)' % log_path
     df = log_file_to_df(log_path)
     make_timestamps_unique(df)
     df = df.set_index('timestamp')
     return df
 
-    
-class HdfStore:
 
-    def __init__(self, store_path):
-        self.store = HDFStore(store_path)
-        #self.store['logs'] = {}
-        #self.store['history'] = {}
+class LogSaver:
 
-    def save_log(self, log_path):
+    @staticmethod
+    def normalize(name):
+        return name.replace('\\', '_').replace('.', '_')
+
+    def __init__(self, store_path, log_list):
+        self.store_path = store_path
+        self.log_list = tuple(sorted(log_list))
+        hsh = hash(self.log_list)
+        sgn = 'n' if hsh < 0 else 'p'
+        temp = 'temp_%s%08X' % (sgn, abs(hsh))
+        self.progress_store_path = '%s.h5' % temp
+        self.progress_history = '%s.pkl' % temp
+
+    def __repr__(self):
+        return '\n'.join('%s: %s' % (k,v) for k,v in self.__dict__.items())
+        
+    def save_all_logs(self, force=False):
+         
+        if os.path.exists(self.store_path):
+            return
+        if not force:
+            assert not os.path.exists(self.progress_history), '''
+                %s exists but %s does not
+                There appears to be a partical conversion
+            ''' % (self.progress_history, self.store_path)
+            
+        self.progress_store = HDFStore(self.progress_store_path)
+        for log_path in self.log_list:
+            self.save_log(log_path)
+        
+        self.check()    
+        print '----'
+        print self.progress_store.keys()
+        print '----'
+        
+        final_store = HDFStore(self.store_path)
+            
+        for i,path in enumerate(self.log_list):
+            log = self.progress_store.get(LogSaver.normalize(path))
+            if i == 0:
+                final_store.put('logs', log)
+            else:
+                final_store.append('logs', log)
+        self.progress_store.close()
+        final_store.close()
+
+    def test_store(self):    
+        final_store = HDFStore(self.store_path)
+        print '----'
+        print final_store.keys()
+        print '-' * 80
+        logs = final_store['/logs']
+        print type(logs)
+        print len(logs)
+        print logs.columns
+        final_store.close()
+
+    def cleanup(self):    
+        os.remove(self.progress_store_path)
+        os.remove(self.progress_history)
+
+    def save_log(self, path):
         """Return a pandas DataFrame for all the valid log entry lines in log_file
             The index of the DataFrame are the uniqufied timestamps of the log entries
         """
-        history = load_object('temp.pkl', {})
-        if log_path in history:
+        history = load_object(self.progress_history, {})
+        if path in history:
             return
         
-        print 'Processing %s' % log_path,
+        #print 'Processing %s' % path,
         start = time.time()
-        df = load_log(log_path)
-        self.store.append('logs', df)
+        df = load_log(path)
+        self.progress_store.put(LogSaver.normalize(path), df)
         load_time = time.time() - start
         
-        history[log_path] = {
+        history[path] = {
             'start': df.index[0],
             'end': df.index[-1],
             'load_time': load_time
         }
-        save_object('temp.pkl', history)
+        save_object(self.progress_history, history)
         del df
-        history[log_path]
-
-    def get_log_paths(self):
-        history = load_object('temp.pkl', {})
+        print history[path]
+        
+    def check(self):
+        history = load_object(self.progress_history, {})
         sorted_keys = history.keys()
-        print history
-        print type(sorted_keys)
         sorted_keys.sort(key=lambda k: history[k]['start'])
-        return [(k,history[k]) for k in sorted_keys]
+        for i,path in enumerate(sorted_keys):
+            hist = history[path]
+            print '%2d: %s  ---  %s : %s' % (i, hist['start'], hist['end'], path)
+        
+        path0 = sorted_keys[0]
+        for path1 in sorted_keys[1:]:
+            hist0,hist1 = history[path0],history[path1] 
+            assert hist0['end'] < hist1['start'], '\n%s %s\n%s %s' % (
+                path0, hist0, 
+                path1, hist1)    
  
 
 def load_log_pattern(hdf_path, path_pattern):  
-    
+
     path_list = glob.glob(path_pattern) 
     print path_list
     if not path_list:
         return
-    
-    hdf_store = HdfStore('temp.h5')
-    for path in path_list:
-        hdf_store.save_log(path)
-    
-    log_history = hdf_store.get_log_paths() 
-    for i,(path,history) in enumerate(log_history[:1]):
-        print '%2d: %s  ---  %s : %s' % (i, history['start'], history['end'], path)
-
-    p0,h0 = log_history[0]
-    for p1,h1 in log_history[1:]:
-        assert h0['end'] < h1['start'], '\n%s %s\n%s %s' % (p0,h0, p1,h1)
-    
-    paths = [p for p,_ in log_history]
         
-    final_store = HDFStore(hdf_path)
+    log_saver = LogSaver(hdf_path, path_list)
     print
-    print hdf_store.store.keys()
-    print type(hdf_store.store['logs'])
-    print type(hdf_store.store.logs)
-   
-    final_store.put(hdf_store.logs[paths[0]])
-    for path in paths[1:]:
-        final_store.append(hdf_store.log[path])
+    print log_saver
+    print
+    log_saver.save_all_logs(force=True)
+
+    
+def main():
+    hdf_path = sys.argv[1]  
+    path_pattern = sys.argv[2]   
+    load_log_pattern(hdf_path, path_pattern)
 
 
-hdf_path = sys.argv[1]  
-path_pattern = sys.argv[2]   
-load_log_pattern(hdf_path, path_pattern)
-
+if __name__ == '__main__':
+    main()
