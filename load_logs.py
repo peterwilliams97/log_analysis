@@ -71,6 +71,29 @@ PATTERN_LOG_LINE = r'''
 ENTRY_KEYS = re.findall(r'\?P<(\w+)>', PATTERN_LOG_LINE)
 RE_LOG_LINE = re.compile(PATTERN_LOG_LINE, re.IGNORECASE|re.DOTALL|re.VERBOSE)
 
+ENTRY_KEYS_SIMPLE = ENTRY_KEYS[:4]
+
+def decode_log_line_simple(line):
+    """ Return a parial list of the parts of a server.log line
+        - date
+        - time
+        - level
+        - file
+        - line
+    """
+    parts = line[:100].split()[:4]
+    if len(parts) < 4 or all(parts[2] != x for x in ('ERROR', 'INFO', 'DEBUG')):
+        return None
+    #print line
+    #print parts
+    #exit()
+    fl,ln = parts[3].split(':')
+    return [
+        parse_timestamp(' '.join(parts[:2])),
+        parts[2],
+        fl,
+        int(ln)
+    ]    
 
 def decode_log_line(line):
     """ Return a list of the parts of a server.log line
@@ -90,21 +113,26 @@ def decode_log_line(line):
     ] 
 
 
-def get_entries(log_file):
+def get_entries(log_file, simple):
     """Generator 
         Returns decoded log entries for all well-formed log entries in a log file"""
+    decoder = decode_log_line_simple if simple else decode_log_line
+    
     with open(log_file, 'rt') as f:
         for i,line in enumerate(f):
-            entry = decode_log_line(line)
+            entry = decoder(line)
             if entry:
                 yield  entry
 
     
-def log_file_to_df(log_file):
+def log_file_to_df(log_file, simple):
     """Returns a pandas dataframe whose rows are the decoded entries of the lines in log_file"""
     # Why can't we construct a DataFrame with a generator?
-    entries = [e for e in get_entries(log_file)]
-    df = DataFrame(entries, columns = ENTRY_KEYS)
+    entries = [e for e in get_entries(log_file, simple)]
+    entry_keys = ENTRY_KEYS_SIMPLE if simple else ENTRY_KEYS
+    for e in entries:
+        assert len(e) == len(entry_keys), '\n%s\n%s'  % (e, entry_keys)
+    df = DataFrame(entries, columns=entry_keys)
     del entries
     return df
 
@@ -120,12 +148,12 @@ def make_timestamps_unique(df):
             df.ix[i,'timestamp'] = df.ix[i-1,'timestamp'] + USEC
 
 
-def load_log(log_path):
+def load_log(log_path, simple):
     """Return a pandas DataFrame for all the valid log entry lines in log_file
         The index of the DataFrame are the uniqufied timestamps of the log entries
     """
     #print 'load_log(%s)' % log_path
-    df = log_file_to_df(log_path)
+    df = log_file_to_df(log_path, simple)
     make_timestamps_unique(df)
     df = df.set_index('timestamp')
     return df
@@ -137,12 +165,15 @@ class LogSaver:
     def normalize(name):
         return name.replace('\\', '_').replace('.', '_')
 
-    def __init__(self, store_path, log_list):
+    def __init__(self, store_path, log_list, simple):
         self.store_path = store_path
         self.log_list = tuple(sorted(log_list))
+        self.simple = simple
         hsh = hash(self.log_list)
         sgn = 'n' if hsh < 0 else 'p'
         temp = 'temp_%s%08X' % (sgn, abs(hsh))
+        if simple:
+            temp = temp + '.simple'
         self.progress_store_path = '%s.h5' % temp
         self.history_path = '%s.pkl' % temp
         self.history = load_object(self.history_path, {})
@@ -150,6 +181,9 @@ class LogSaver:
     def __repr__(self):
         return '\n'.join('%s: %s' % (k,v) for k,v in self.__dict__.items())
         
+    def __str__(self):
+        return '\n'.join([repr(self), '%d log files' % len(self.log_list)])    
+
     def save_all_logs(self, force=False):
          
         if os.path.exists(self.store_path):
@@ -205,7 +239,7 @@ class LogSaver:
         
         print 'Processing %s' % path,
         start = time.time()
-        df = load_log(path)
+        df = load_log(path, simple=self.simple)
         self.progress_store.put(LogSaver.normalize(path), df)
         load_time = time.time() - start
         
@@ -238,24 +272,44 @@ class LogSaver:
                 path1, hist1)    
  
 
-def load_log_pattern(hdf_path, path_pattern):  
+def load_log_pattern(hdf_path, path_pattern, force=False, simple=False):  
 
     path_list = glob.glob(path_pattern) 
     print path_list
     if not path_list:
         return
         
-    log_saver = LogSaver(hdf_path, path_list)
+    log_saver = LogSaver(hdf_path, path_list, simple=simple)
     print
     print log_saver
     print
-    log_saver.save_all_logs(force=True)
+    log_saver.save_all_logs(force=force)
 
-    
+
 def main():
-    hdf_path = sys.argv[1]  
-    path_pattern = sys.argv[2]   
-    load_log_pattern(hdf_path, path_pattern)
+    import optparse
+    
+    parser = optparse.OptionParser('python %s [options]' % sys.argv[0])
+    parser.add_option('-o', '--name', dest='hdf_path',  
+            default=None, 
+            help='Name of the HDF5 file the DataFrame will be stored in')
+    parser.add_option('-i', '--log-file', dest='path_pattern',  
+            default=None, 
+            help='Log files to match')            
+    parser.add_option('-f', '--force', dest='force', action='store_true',  default=False, 
+             help='Force rebuilding of HDF5 file')
+    parser.add_option('-s', '--simple', dest='simple', action='store_true',  default=False, 
+             help='Simple mode. No log content or thread') 
+    options, args = parser.parse_args()
+        
+    if not options.hdf_path or not options.path_pattern:
+        print '    Usage: %s' % parser.usage
+        print __doc__
+        print '    --help for more information'
+        exit()
+ 
+    load_log_pattern(options.hdf_path, options.path_pattern, force=options.force, 
+            simple=options.simple)
 
 
 if __name__ == '__main__':
