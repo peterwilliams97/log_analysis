@@ -163,7 +163,7 @@ class LogSaver:
 
     @staticmethod
     def normalize(name):
-        return name.replace('\\', '_').replace('.', '_')
+        return name.replace('\\', '_').replace('.', '_').replace('-', '_')
 
     def __init__(self, store_path, log_list, simple):
         self.store_path = store_path
@@ -272,13 +272,16 @@ class LogSaver:
                 path1, hist1)    
  
 
-def load_log_pattern(hdf_path, path_pattern, force=False, simple=False):  
+def load_log_pattern(hdf_path, path_pattern, force=False, simple=False, number_files=-1):  
 
     path_list = glob.glob(path_pattern) 
     print path_list
     if not path_list:
         return
-        
+
+    if number_files >= 0:
+        path_list = path_list[:number_files]
+
     log_saver = LogSaver(hdf_path, path_list, simple=simple)
     print
     print log_saver
@@ -290,18 +293,18 @@ def main():
     import optparse
     
     parser = optparse.OptionParser('python %s [options]' % sys.argv[0])
-    parser.add_option('-o', '--name', dest='hdf_path',  
-            default=None, 
+    parser.add_option('-o', '--name', dest='hdf_path', default=None, 
             help='Name of the HDF5 file the DataFrame will be stored in')
-    parser.add_option('-i', '--log-file', dest='path_pattern',  
-            default=None, 
+    parser.add_option('-i', '--log-file', dest='path_pattern', default=None, 
             help='Log files to match')            
-    parser.add_option('-f', '--force', dest='force', action='store_true',  default=False, 
-             help='Force rebuilding of HDF5 file')
-    parser.add_option('-s', '--simple', dest='simple', action='store_true',  default=False, 
-             help='Simple mode. No log content or thread') 
+    parser.add_option('-f', '--force', dest='force', action='store_true', default=False, 
+            help='Force rebuilding of HDF5 file')
+    parser.add_option('-s', '--simple', dest='simple', action='store_true', default=False, 
+            help='Simple mode. No log content or thread')
+    parser.add_option('-n', '--number-files', dest='number_files', type='int', default=-1, 
+            help='Log files to match')            
     options, args = parser.parse_args()
-        
+
     if not options.hdf_path or not options.path_pattern:
         print '    Usage: %s' % parser.usage
         print __doc__
@@ -309,7 +312,7 @@ def main():
         exit()
  
     load_log_pattern(options.hdf_path, options.path_pattern, force=options.force, 
-            simple=options.simple)
+            simple=options.simple, number_files=options.number_files)
 
 
 if __name__ == '__main__':
