@@ -113,28 +113,38 @@ def decode_log_line(line):
     ] 
 
 
-def get_entries(log_file, simple):
-    """Generator 
-        Returns decoded log entries for all well-formed log entries in a log file"""
+def get_header_entries(log_file, simple):
+    """ Returns decoded log entries for all well-formed log entries in a log file"""
+    
     decoder = decode_log_line_simple if simple else decode_log_line
     
+    entries = []
+    header = []
+    in_header = True
     with open(log_file, 'rt') as f:
-        for i,line in enumerate(f):
+        for i, line in enumerate(f):
+            line = line.rstrip('\n')
             entry = decoder(line)
             if entry:
-                yield  entry
-
+                entries.append(entry)
+            elif in_header:
+                if i < 10 and line.startswith('#'):
+                    header.append(line)
+                else:
+                    in_header = False
+    return header, entries                
+           
     
 def log_file_to_df(log_file, simple):
     """Returns a pandas dataframe whose rows are the decoded entries of the lines in log_file"""
     # Why can't we construct a DataFrame with a generator?
-    entries = [e for e in get_entries(log_file, simple)]
+    header, entries = get_header_entries(log_file, simple)
     entry_keys = ENTRY_KEYS_SIMPLE if simple else ENTRY_KEYS
     for e in entries:
         assert len(e) == len(entry_keys), '\n%s\n%s'  % (e, entry_keys)
     df = DataFrame(entries, columns=entry_keys)
     del entries
-    return df
+    return header, df
 
 
 USEC = DateOffset(microseconds=1)
@@ -152,11 +162,10 @@ def load_log(log_path, simple):
     """Return a pandas DataFrame for all the valid log entry lines in log_file
         The index of the DataFrame are the uniqufied timestamps of the log entries
     """
-    #print 'load_log(%s)' % log_path
-    df = log_file_to_df(log_path, simple)
+    header, df = log_file_to_df(log_path, simple)
     make_timestamps_unique(df)
     df = df.set_index('timestamp')
-    return df
+    return header, df
 
 
 class LogSaver:
@@ -191,7 +200,7 @@ class LogSaver:
         if not force:
             assert not os.path.exists(self.history_path), '''
                 %s exists but %s does not
-                There appears to be a partical conversion
+                There appears to be a conversion in progress
             ''' % (self.history_path, self.store_path)
             
         self.progress_store = HDFStore(self.progress_store_path)
@@ -214,6 +223,11 @@ class LogSaver:
         final_store.put('logs', df_all)
         final_store.close()
         print 'Closed %s' % self.store_path
+        
+        # Save the hsitory in a corresponding file
+        save_object(self.store_path + '.history.pkl', self.history)
+        print 'Closed %s' % self.store_path
+        
 
     def test_store(self):    
         final_store = HDFStore(self.store_path)
@@ -226,7 +240,7 @@ class LogSaver:
         print logs.columns
         final_store.close()
 
-    def cleanup(self):    
+    def cleanup(self): 
         os.remove(self.progress_store_path)
         os.remove(self.history_path)
 
@@ -239,7 +253,7 @@ class LogSaver:
         
         print 'Processing %s' % path,
         start = time.time()
-        df = load_log(path, simple=self.simple)
+        header, df = load_log(path, simple=self.simple)
         self.progress_store.put(LogSaver.normalize(path), df)
         load_time = time.time() - start
         
@@ -247,11 +261,12 @@ class LogSaver:
             'start': df.index[0],
             'end': df.index[-1],
             'load_time': int(load_time),
-            'num': len(df)
+            'num': len(df),
+            'header': header
         }
         save_object(self.history_path, self.history)
         del df
-        print self.history[path],
+        print { k:v for k,v in self.history[path].items() if k != 'header' },
         print '%d of %d' % (len(self.history), len(self.log_list))
         
     def check(self):
@@ -260,7 +275,7 @@ class LogSaver:
         sorted_keys.sort(key=lambda k: history[k]['start'])
         print '-' * 80
         print 'Time range by log file'
-        for i,path in enumerate(sorted_keys):
+        for i, path in enumerate(sorted_keys):
             hist = history[path]
             print '%2d: %s  ---  %s : %s' % (i, hist['start'], hist['end'], path)
         
@@ -272,7 +287,8 @@ class LogSaver:
                 path1, hist1)    
  
 
-def load_log_pattern(hdf_path, path_pattern, force=False, simple=False, number_files=-1):  
+def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, simple=False, 
+                     number_files=-1):  
 
     path_list = glob.glob(path_pattern) 
     print path_list
@@ -286,6 +302,9 @@ def load_log_pattern(hdf_path, path_pattern, force=False, simple=False, number_f
     print
     print log_saver
     print
+    if clean:
+        print 'Cleaning temp files'
+        log_saver.cleanup()
     log_saver.save_all_logs(force=force)
 
 
@@ -299,6 +318,8 @@ def main():
             help='Log files to match')            
     parser.add_option('-f', '--force', dest='force', action='store_true', default=False, 
             help='Force rebuilding of HDF5 file')
+    parser.add_option('-c', '--clean', dest='clean', action='store_true', default=False, 
+            help='Delete temp files for this processing')        
     parser.add_option('-s', '--simple', dest='simple', action='store_true', default=False, 
             help='Simple mode. No log content or thread')
     parser.add_option('-n', '--number-files', dest='number_files', type='int', default=-1, 
@@ -311,7 +332,8 @@ def main():
         print '    --help for more information'
         exit()
  
-    load_log_pattern(options.hdf_path, options.path_pattern, force=options.force, 
+    load_log_pattern(options.hdf_path, options.path_pattern, force=options.force,
+            clean=options.clean,
             simple=options.simple, number_files=options.number_files)
 
 
