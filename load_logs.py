@@ -12,30 +12,9 @@ from pandas import DataFrame, Series, Timestamp, DateOffset, HDFStore
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import cPickle as pickle
+from common import ObjectDirectory, versions
 
-
-def versions():
-    print '-' * 60
-    print 'python:', sys.version
-    print 'numpy:', np.__version__
-    print 'matplotlib:', mpl.__version__
-    print 'pandas:', pd.__version__
-    print '-' * 60
-    
 versions()  
-
-
-def save_object(path, obj):
-    """Save obj to path"""
-    pickle.dump(obj, open(path, 'wb'))
-    
-
-def load_object(path, default=None):
-    """Load object from path"""
-    try:
-        return pickle.load(open(path, 'rb'))
-    except:
-        return default
 
 
 def parse_timestamp(timestamp):
@@ -170,23 +149,35 @@ def load_log(log_path, simple):
 
 class LogSaver:
 
+    FINAL = 'logs'
+    PROGRESS = 'progress'
+    HISTORY = 'history'
+
     @staticmethod
     def normalize(name):
         return name.replace('\\', '_').replace('.', '_').replace('-', '_')
-
-    def __init__(self, store_path, log_list, simple):
-        self.store_path = store_path
-        self.log_list = tuple(sorted(log_list))
-        self.simple = simple
-        hsh = hash(self.log_list)
+        
+    @staticmethod
+    def temp_name(log_list, simple):
+        hsh = hash(log_list)
         sgn = 'n' if hsh < 0 else 'p'
         temp = 'temp_%s%08X' % (sgn, abs(hsh))
         if simple:
-            temp = temp + '.simple'
-        self.progress_store_path = '%s.h5' % temp
-        self.history_path = '%s.pkl' % temp
-        self.history = load_object(self.history_path, {})
+            temp = temp + '.simple' 
+        return temp    
 
+    def __init__(self, store_path, log_list, simple):
+        self.directory = ObjectDirectory(store_path)
+        self.log_list = tuple(sorted(log_list))
+        self.simple = simple
+        
+        self.temp = LogSaver.temp_name(self.log_list, simple)
+        self.history_path = self.directory.get_path(LogSaver.HISTORY, temp=True)
+        self.progress_store_path = self.directory.get_path(LogSaver.PROGRESS, temp=True, is_df=True)
+        self.store_path = self.directory.get_path(LogSaver.FINAL, is_df=True)
+        
+        self.history = ObjectDirectory.load_object(self.history_path, {})
+        
     def __repr__(self):
         return '\n'.join('%s: %s' % (k,v) for k,v in self.__dict__.items())
         
@@ -199,10 +190,12 @@ class LogSaver:
             return
         if not force:
             assert not os.path.exists(self.history_path), '''
-                %s exists but %s does not
-                There appears to be a conversion in progress
+                %s exists but %s does not.
+                There appears to be a conversion in progress.
+                -f forces conversion to complete.
             ''' % (self.history_path, self.store_path)
-            
+        
+        self.directory.make_dir_if_necessary(self.progress_store_path)
         self.progress_store = HDFStore(self.progress_store_path)
         for log_path in self.log_list:
             self.save_log(log_path)
@@ -225,7 +218,7 @@ class LogSaver:
         print 'Closed %s' % self.store_path
         
         # Save the hsitory in a corresponding file
-        save_object(self.store_path + '.history.pkl', self.history)
+        ObjectDirectory.save_object(self.store_path + '.history.pkl', self.history)
         print 'Closed %s' % self.store_path
         
 
@@ -264,13 +257,13 @@ class LogSaver:
             'num': len(df),
             'header': header
         }
-        save_object(self.history_path, self.history)
+        ObjectDirectory.save_object(self.history_path, self.history)
         del df
         print { k:v for k,v in self.history[path].items() if k != 'header' },
         print '%d of %d' % (len(self.history), len(self.log_list))
-        
+
     def check(self):
-        history = load_object(self.history_path, {})
+        history = ObjectDirectory.load_object(self.history_path, {})
         sorted_keys = history.keys()
         sorted_keys.sort(key=lambda k: history[k]['start'])
         print '-' * 80
