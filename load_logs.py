@@ -1,20 +1,35 @@
 # -*- coding: utf-8 -*-
 """
-    Decode PaperCut logs
+    Load PaperCut logs into a pandas DataFrame and store it in an HDF5 file.
 
-    Requires pandas 0.11.0 or higher
+    Tested with pandas 0.11.0 or higher.
+    
+    e.g. 
+        python load_logs.py -s -o out_dir -i in_dir\server.log*
+    
+        - parses all the server_log* files in in_dir
+        - converts them to a DataFrame
+        - saves the DataFrame in the HDF5 file data/out_dir/logs.h5 in table '/logs'
+        
+        This is done in 2 steps
+        
+        1. Each server log is converted to an DataFrame and saved as a table in 
+            data/out_dir/temp/progress.h5
+        2. The HDF5 files in data/out_dir/temp are combined and saved as data/out_dir/logs.h5
+        
+        This is done to allow restarting during the processing of very large collections of 
+        server.log files.
+
+    FIXME:    
+        Replace table '/logs' with '/table'        
+    
 """
 from __future__ import division
 import re, sys, glob, os, time 
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series, Timestamp, DateOffset, HDFStore
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import cPickle as pickle
 from common import ObjectDirectory, versions
-
-versions()  
 
 
 def parse_timestamp(timestamp):
@@ -63,10 +78,7 @@ def decode_log_line_simple(line):
     parts = line[:100].split()[:4]
     if len(parts) < 4 or all(parts[2] != x for x in ('ERROR', 'INFO', 'DEBUG')):
         return None
-    #print line
-    #print parts
-    #exit()
-    fl,ln = parts[3].split(':')
+    fl, ln = parts[3].split(':')
     return [
         parse_timestamp(' '.join(parts[:2])),
         parts[2],
@@ -74,6 +86,7 @@ def decode_log_line_simple(line):
         int(ln)
     ]    
 
+    
 def decode_log_line(line):
     """ Return a list of the parts of a server.log line
         See PATTERN_LOG_LINE for the parts
@@ -92,10 +105,10 @@ def decode_log_line(line):
     ] 
 
 
-def get_header_entries(log_file, simple):
+def get_header_entries(log_file, extra):
     """ Returns decoded log entries for all well-formed log entries in a log file"""
     
-    decoder = decode_log_line_simple if simple else decode_log_line
+    decoder = decode_log_line if extra else decode_log_line_simple
     
     entries = []
     header = []
@@ -114,11 +127,11 @@ def get_header_entries(log_file, simple):
     return header, entries                
            
     
-def log_file_to_df(log_file, simple):
+def log_file_to_df(log_file, extra):
     """Returns a pandas dataframe whose rows are the decoded entries of the lines in log_file"""
     # Why can't we construct a DataFrame with a generator?
-    header, entries = get_header_entries(log_file, simple)
-    entry_keys = ENTRY_KEYS_SIMPLE if simple else ENTRY_KEYS
+    header, entries = get_header_entries(log_file, extra)
+    entry_keys = ENTRY_KEYS if extra else ENTRY_KEYS_SIMPLE
     for e in entries:
         assert len(e) == len(entry_keys), '\n%s\n%s'  % (e, entry_keys)
     df = DataFrame(entries, columns=entry_keys)
@@ -137,17 +150,26 @@ def make_timestamps_unique(df):
             df.ix[i,'timestamp'] = df.ix[i-1,'timestamp'] + USEC
 
 
-def load_log(log_path, simple):
+def load_log(log_path, extra):
     """Return a pandas DataFrame for all the valid log entry lines in log_file
         The index of the DataFrame are the uniqufied timestamps of the log entries
     """
-    header, df = log_file_to_df(log_path, simple)
+    header, df = log_file_to_df(log_path, extra)
     make_timestamps_unique(df)
     df = df.set_index('timestamp')
     return header, df
 
 
 class LogSaver:
+    """
+        self.directory : Directory structure for temp and saved files
+        self.log_list : List of server.log files to process
+        self.extra : True if log messages and thread ids are to be saved too
+        self.history_path : History of server.log conversions saved here
+        self.progress_store_path : HDF5 file that holds one DataFrame for each server.log file 
+        self.store_path : Final DataFrame of all server.log entries saved here
+        self.history : History of server.log conversions
+    """
 
     FINAL = 'logs'
     PROGRESS = 'progress'
@@ -156,26 +178,31 @@ class LogSaver:
     @staticmethod
     def normalize(name):
         return name.replace('\\', '_').replace('.', '_').replace('-', '_')
-        
+     
     @staticmethod
-    def temp_name(log_list, simple):
-        hsh = hash(log_list)
-        sgn = 'n' if hsh < 0 else 'p'
-        temp = 'temp_%s%08X' % (sgn, abs(hsh))
-        if simple:
-            temp = temp + '.simple' 
-        return temp    
+    def make_name(base_name, extra):
+        if extra:
+            return base_name + '.extra'
+        else:
+            return base_name
+     
+    #@staticmethod
+    #def temp_name(log_list, extra):
+    #    hsh = hash(log_list)
+    #    sgn = 'n' if hsh < 0 else 'p'
+    #    temp = 'temp_%s%08X' % (sgn, abs(hsh))
+    #    return LogSaver.make_name(temp, extra)    
 
-    def __init__(self, store_path, log_list, simple):
+    def __init__(self, store_path, log_list, extra):
         self.directory = ObjectDirectory(store_path)
         self.log_list = tuple(sorted(log_list))
-        self.simple = simple
+        self.extra = extra
         
-        self.temp = LogSaver.temp_name(self.log_list, simple)
+        self.temp = LogSaver.temp_name(self.log_list, extra)
         self.history_path = self.directory.get_path(LogSaver.HISTORY, temp=True)
         self.progress_store_path = self.directory.get_path(LogSaver.PROGRESS, temp=True, is_df=True)
-        self.store_path = self.directory.get_path(LogSaver.FINAL, is_df=True)
-        
+        self.store_path = self.directory.get_path(LogSaver.make_name(LogSaver.FINAL, extra), 
+                            is_df=True)
         self.history = ObjectDirectory.load_object(self.history_path, {})
         
     def __repr__(self):
@@ -197,8 +224,8 @@ class LogSaver:
         
         self.directory.make_dir_if_necessary(self.progress_store_path)
         self.progress_store = HDFStore(self.progress_store_path)
-        for log_path in self.log_list:
-            self.save_log(log_path)
+        for path in self.log_list:
+            self.save_log(path)
         
         self.check()    
         print '--------'
@@ -217,8 +244,8 @@ class LogSaver:
         final_store.close()
         print 'Closed %s' % self.store_path
         
-        # Save the hsitory in a corresponding file
-        ObjectDirectory.save_object(self.store_path + '.history.pkl', self.history)
+        # Save the history in a corresponding file
+        self.directory.save('history', self.history)
         print 'Closed %s' % self.store_path
         
 
@@ -246,7 +273,7 @@ class LogSaver:
         
         print 'Processing %s' % path,
         start = time.time()
-        header, df = load_log(path, simple=self.simple)
+        header, df = load_log(path, extra=self.extra)
         self.progress_store.put(LogSaver.normalize(path), df)
         load_time = time.time() - start
         
@@ -280,7 +307,7 @@ class LogSaver:
                 path1, hist1)    
  
 
-def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, simple=False, 
+def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, extra=False, 
                      number_files=-1):  
 
     path_list = glob.glob(path_pattern) 
@@ -291,7 +318,7 @@ def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, simple=Fa
     if number_files >= 0:
         path_list = path_list[:number_files]
 
-    log_saver = LogSaver(hdf_path, path_list, simple=simple)
+    log_saver = LogSaver(hdf_path, path_list, extra=extra)
     print
     print log_saver
     print
@@ -310,11 +337,13 @@ def main():
     parser.add_option('-i', '--log-file', dest='path_pattern', default=None, 
             help='Log files to match')            
     parser.add_option('-f', '--force', dest='force', action='store_true', default=False, 
-            help='Force rebuilding of HDF5 file')
+            help='''Force rebuilding of HDF5 file. 
+        Rebuild the HDF5 file from the in-progress (temp) files and over-write the existing final 
+        HDF5 file.''')
     parser.add_option('-c', '--clean', dest='clean', action='store_true', default=False, 
-            help='Delete temp files for this processing')        
-    parser.add_option('-s', '--simple', dest='simple', action='store_true', default=False, 
-            help='Simple mode. No log content or thread')
+            help='Delete the in-progress (temp) files for this processing session.')        
+    parser.add_option('-e', '--extra', dest='extra', action='store_true', default=False, 
+            help='Extra information mode. Stores log content and thread id')
     parser.add_option('-n', '--number-files', dest='number_files', type='int', default=-1, 
             help='Log files to match')            
     options, args = parser.parse_args()
@@ -326,9 +355,9 @@ def main():
         exit()
  
     load_log_pattern(options.hdf_path, options.path_pattern, force=options.force,
-            clean=options.clean,
-            simple=options.simple, number_files=options.number_files)
+            clean=options.clean, extra=options.extra, number_files=options.number_files)
 
 
 if __name__ == '__main__':
+    versions()  
     main()
