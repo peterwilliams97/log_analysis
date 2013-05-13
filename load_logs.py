@@ -345,7 +345,7 @@ def main():
     parser.add_option('-e', '--extra', dest='extra', action='store_true', default=False, 
             help='Extra information mode. Stores log content and thread id')
     parser.add_option('-n', '--number-files', dest='number_files', type='int', default=-1, 
-            help='Log files to match')            
+            help='Max number of log files to process')            
     options, args = parser.parse_args()
 
     if not options.hdf_path or not options.path_pattern:

@@ -9,20 +9,13 @@ import matplotlib as mpl
 from datetime import datetime, timedelta
 from collections import OrderedDict
 from common import ObjectDirectory
-
-
-print 'python:', sys.version
-print 'numpy:', np.__version__
-print 'matplotlib:', mpl.__version__
-print 'pandas:', pd.__version__
-print '-' * 80
-
-
 import optparse
 
 parser = optparse.OptionParser('python %s [options]' % sys.argv[0])
 parser.add_option('-i', '--path', dest='path', default=None, 
-        help='Saved log file directory')            
+        help='Saved log file directory')      
+parser.add_option('-n', '--number-entries', dest='n_entries', type='int', default=-1, 
+            help='Number of log entries to process')         
 options, args = parser.parse_args()
 
 if not options.path:
@@ -39,6 +32,9 @@ print directory
 df = directory.load('logs.h5')
 print df
 
+if options.n_entries >= 0:
+    df = df[:options.n_entries]
+
 secs = (df.index.max() - df.index.min()).total_seconds()
 hours = secs/3600
 levels = df.level.unique()
@@ -50,7 +46,7 @@ print '%.1f thousand log entries/hour' % (int(len(df)/hours)/1000.0)
 print df.shape, df.columns
 for level in levels:
     print '%-5s : %5d' % (level, len(df[df.level==level]))
-print 'Total : %d' % df.shape[0] 
+print 'df : %s' % str(df.shape)
 
 
 def truncate_to_minutes(timestamp):
@@ -72,27 +68,24 @@ df_whole_minutes = df
 #df = df.between_time(start_time, start_time + timedelta(hours=2))
 #print '**', df.index.min(), df.index.max()
 
-def get_minute_counts(df, subsample=False):
+def get_minute_counts(df):
     bars = df.file.resample('1S', how='count', convention='center')
+    # Empty means zero counts !
+    bars = bars.replace(np.nan, 0.0)
+    # Smooth by 2 bar widths
     bars = pd.rolling_mean(bars, 120, center=True)
-    return bars.resample('120S', how='sum', convention='center')   
-    
-    if subsample:
-        bars = df.file.resample('1S', how='count', convention='center')
-        bars = pd.rolling_sum(bars, 60, center=True)
-    else:
-        bars = df.file.resample('1min', how='count', convention='center')
-    return bars
+    bars = bars.resample('60S', how='sum', convention='center')  
+    # Empty means zero counts !
+    bars = bars.replace(np.nan, 0.0)  
+    return bars    
     
 
 # The counts for each 1 minute bin
 minute_counts = get_minute_counts(df)
-minute_counts_ss = get_minute_counts(df, subsample=True)
 print 'minute_counts: %s' % minute_counts.describe()    
-print 'minute_counts_ss: %s' % minute_counts_ss.describe()
 
-level_counts = {level: get_minute_counts(
-        df[df.level==level], subsample=True)
+
+level_counts = {level: get_minute_counts(df[df.level==level])
         for level in levels}
      
  
@@ -105,7 +98,7 @@ level_peaks = {level: get_peak(level_counts[level])  for level in levels}
 
 unique_files = df.file.unique()
 print '%d source files' % len(unique_files)
-for i, fl in enumerate(sorted(unique_files)):
+for i, fl in enumerate(sorted(unique_files)[:5]):
     print '%3d: %s' % (i, fl)
 
 directory.save('unique_files', unique_files)    
@@ -116,7 +109,7 @@ directory.save('unique_files', unique_files)
 level_file_line = df.groupby(['level', 'file', 'line'])
 lfl_size = level_file_line.size()
 lfl_sorted = lfl_size.order(ascending=False)
-print 'level, file, line: %s' % lfl_sorted.shape
+print 'lfl_sorted: %s' % str(lfl_sorted.shape)
 
 #directory.save('level_file_line', tuple(level_file_line)) 
 directory.save('lfl_sorted', lfl_sorted)
@@ -125,6 +118,7 @@ directory.save('lfl_sorted', lfl_sorted)
 # Construct mappings in both directions
 lfl_to_string = OrderedDict(((lvl,fl,ln), '%s:%d' % (fl,ln)) for lvl,fl,ln in lfl_sorted.index)
 string_to_lfl = OrderedDict(('%s:%d' % (fl,ln), (lvl,fl,ln)) for lvl,fl,ln in lfl_sorted.index)
+print 'string_to_lfl: %s' % len(string_to_lfl)
 
 # [((level,file,line),count)] sorted by count in descending order
 entry_types_list = zip(lfl_sorted.index, lfl_sorted)
@@ -132,11 +126,11 @@ entry_types_list = zip(lfl_sorted.index, lfl_sorted)
 # {(level,file,line) : count}
 entry_types = OrderedDict(entry_types_list)
 directory.save('entry_types', entry_types)
+print 'entry_types: %s' % len(entry_types)
 
+#
 # Build the correlation table
- 
-
-
+# 
 lfl_freq_dict = {s: get_minute_counts(df[(df.file==fl) & (df.line==ln)])
               for s,(lvl,fl,ln) in string_to_lfl.items()}
 lfl_freq = DataFrame(lfl_freq_dict, columns=string_to_lfl.keys())              
@@ -144,6 +138,7 @@ directory.save('lfl_freq', lfl_freq)
 
 lfl_freq_corr = lfl_freq.corr()
 directory.save('lfl_freq_corr', lfl_freq_corr)
+print 'lfl_freq_corr: %s' % str(lfl_freq_corr.shape)
 
 if False:
 
