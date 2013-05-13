@@ -45,14 +45,16 @@ def load_object(path, default=None):
         return default
 
 
-def save_df(path, df):        
+def save_df(path, df):      
+    """Save DataFrame df in HDF5 store path in '\logs' table
+        FIXME: Use a more neutral name for the table"""
     store = HDFStore(path)
     store.put('logs', df)
     store.close()
 
 
-def load_df(path, default=None):        
-    print 'load_df', path, default
+def load_df(path, default=None):
+    """Load DataFrame for HDF5 store path '\logs' table"""
     try:
         store = HDFStore(path)
         print store.keys()
@@ -69,6 +71,15 @@ def get_name_from_path(path):
 
         
 class ObjectDirectory:
+    """Impose a directory structure
+        ObjectDirectory(<name>) is kept in <ROOT>/<name>
+        
+        DataFrames are stored in HDF5 files with extension .h5 in 
+        table '\log' (FIXME)
+        
+        All other object types are pickled with extension .pkl
+        
+    """    
 
     ROOT = 'data'
     
@@ -120,6 +131,7 @@ class ObjectDirectory:
            
     @staticmethod
     def load_object(path, default=None):
+        assert os.path.exists(path), '%s does not exist' % path
         is_df = path.endswith('.h5')
         print 'is_df', is_df, path
         if is_df:
@@ -140,5 +152,4 @@ class ObjectDirectory:
         print is_df, path
         return ObjectDirectory.load_object(path, default)
 
-    
-    
+ 

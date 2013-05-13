@@ -1,11 +1,22 @@
 # -*- coding: utf-8 -*-
-
+"""
+    Preprocess DataFrames created by load_logs.py
+    
+    load_logs.py stores a DataFrame in an HDF5 file called logs.py in a subdirectory
+    of ObjectDirectory.ROOT which defaults to ./data
+    
+    preprocess.py reads this file and creates
+    
+    lfl_freq (lfl_freq.h5) Per-minute frequency counts of log entries over the time covered by the server logs for each file:line
+    lfl_freq_corr (lfl_freq_corr.h5) Correlations of each file:line series in lfl_freq
+    lfl_sorted (lfl_sorted.pkl) Lists of (level,file,line) <==> file:line string mappings
+"""
 from __future__ import division
 import re, sys, glob 
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series, Timestamp, DateOffset
-import matplotlib as mpl
+#import matplotlib as mpl
 from datetime import datetime, timedelta
 from collections import OrderedDict
 from common import ObjectDirectory
@@ -24,7 +35,6 @@ if not options.path:
     print '    --help for more information'
     exit()
  
-
 
 directory = ObjectDirectory(options.path)
 print directory
@@ -54,54 +64,76 @@ def truncate_to_minutes(timestamp):
     return Timestamp(datetime(timestamp.year, timestamp.month, timestamp.day, timestamp.hour, 
         timestamp.minute))
 
-# Remove the ends so data is full 1-minutes bins aligned on whole minutes        
+
+def get_details(df):
+    return {
+        'start_time': df.index.min(), 
+        'end_time': df.index.max(),
+        'count': df.count()
+    }    
+    
+        
+if False:        
+    def get_peak(counts):
+        """Retun the peak value in Series counts"""
+        if len(counts) == 0:
+            return None
+        return counts.indmax()    
+        # return counts.index[counts.argmax()]        
+        
+       
 start_time, end_time = df.index.min(), df.index.max()
 print 'start_time, end_time = %s, %s' % (start_time, end_time)
+
+# Start time and end time trunctated to whole minutes
 start_time = truncate_to_minutes(start_time + timedelta(minutes=2))
 end_time = truncate_to_minutes(end_time - timedelta(minutes=2))
 print 'start_time, end_time = %s, %s' % (start_time, end_time)
 
-# !@#$ Why doesn't this work?
-#df_whole_minutes = df.between_time(start_time, end_time)
-#print 'df_whole_minutes = %s' % df_whole_minutes
-df_whole_minutes = df
-#df = df.between_time(start_time, start_time + timedelta(hours=2))
-#print '**', df.index.min(), df.index.max()
+details = get_details(df)
+directory.save('details', details)
+
+
 
 def get_minute_counts(df):
-    bars = df.file.resample('1S', how='count', convention='center')
+    """Return a DataFrame whose index is 1 minute increments over the duration
+        of df and whose values are the number of entries in df over each
+        minute
+    """
+    bins = df.file.resample('1S', how='count', convention='center')
     # Empty means zero counts !
-    bars = bars.replace(np.nan, 0.0)
-    # Smooth by 2 bar widths
-    bars = pd.rolling_mean(bars, 120, center=True)
-    bars = bars.resample('60S', how='sum', convention='center')  
+    bins = bins.fillna(0.0)
+    # Smooth by 2 bin widths
+    bins = pd.rolling_mean(bins, 120, center=True)
+    # Get the 1 minute bins
+    bins = bins.resample('60S', how='sum', convention='center')  
     # Empty means zero counts !
-    bars = bars.replace(np.nan, 0.0)  
-    return bars    
+    bins = bins.fillna(0.0)
+    # All the NaNs should have been converted to zeros
+    assert not pd.isnull(bins).any()
+    # Remove the ends so data is full 1-minutes bins aligned on whole minutes 
+    bins = bins[start_time: end_time]
+    return bins    
     
-
 # The counts for each 1 minute bin
 minute_counts = get_minute_counts(df)
-print 'minute_counts: %s' % minute_counts.describe()    
-
+print 'minute_counts: %s\n%s' % (type(minute_counts), minute_counts.describe())    
+print 'total entries: %s' % minute_counts.sum()
 
 level_counts = {level: get_minute_counts(df[df.level==level])
         for level in levels}
-     
- 
-def get_peak(counts):
-    return counts.index[counts.argmax()]
-   
-        
-level_peaks = {level: get_peak(level_counts[level])  for level in levels}       
 
+       
+#level_peaks = {level: get_peak(level_counts[level])  for level in levels}  
+# print 'level_peaks: %s' % level_peaks     
 
-unique_files = df.file.unique()
-print '%d source files' % len(unique_files)
-for i, fl in enumerate(sorted(unique_files)[:5]):
-    print '%3d: %s' % (i, fl)
+if False:
+    unique_files = df.file.unique()
+    print '%d source files' % len(unique_files)
+    for i, fl in enumerate(sorted(unique_files)[:5]):
+        print '%3d: %s' % (i, fl)
 
-directory.save('unique_files', unique_files)    
+    directory.save('unique_files', unique_files)    
     
 #
 # Get all the unique log messages

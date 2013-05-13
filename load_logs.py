@@ -198,7 +198,7 @@ class LogSaver:
         self.log_list = tuple(sorted(log_list))
         self.extra = extra
         
-        self.temp = LogSaver.temp_name(self.log_list, extra)
+        #self.temp = LogSaver.temp_name(self.log_list, extra)
         self.history_path = self.directory.get_path(LogSaver.HISTORY, temp=True)
         self.progress_store_path = self.directory.get_path(LogSaver.PROGRESS, temp=True, is_df=True)
         self.store_path = self.directory.get_path(LogSaver.make_name(LogSaver.FINAL, extra), 
