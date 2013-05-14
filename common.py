@@ -131,7 +131,6 @@ class ObjectDirectory:
            
     @staticmethod
     def load_object(path, default=None):
-        assert os.path.exists(path), '%s does not exist' % path
         is_df = path.endswith('.h5')
         print 'is_df', is_df, path
         if is_df:

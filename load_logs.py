@@ -78,12 +78,22 @@ def decode_log_line_simple(line):
     parts = line[:100].split()[:4]
     if len(parts) < 4 or all(parts[2] != x for x in ('ERROR', 'INFO', 'DEBUG')):
         return None
-    fl, ln = parts[3].split(':')
+    try:    
+        fl, ln_s = parts[3].split(':')
+        ln = int(ln_s)
+    except:
+        print
+        print '!' * 80
+        print line[:100]
+        print parts
+        print parts[3]
+        print '^' * 80
+        return None
     return [
         parse_timestamp(' '.join(parts[:2])),
         parts[2],
         fl,
-        int(ln)
+        ln
     ]    
 
     
@@ -177,7 +187,7 @@ class LogSaver:
 
     @staticmethod
     def normalize(name):
-        return name.replace('\\', '_').replace('.', '_').replace('-', '_')
+        return re.sub(r'[^a-zA-Z0-9]', '_', name)
      
     @staticmethod
     def make_name(base_name, extra):

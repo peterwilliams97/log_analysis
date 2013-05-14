@@ -72,34 +72,13 @@ def get_details(df):
         'count': df.count()
     }    
     
-        
-if False:        
-    def get_peak(counts):
-        """Retun the peak value in Series counts"""
-        if len(counts) == 0:
-            return None
-        return counts.indmax()    
-        # return counts.index[counts.argmax()]        
-        
-       
-start_time, end_time = df.index.min(), df.index.max()
-print 'start_time, end_time = %s, %s' % (start_time, end_time)
-
-# Start time and end time trunctated to whole minutes
-start_time = truncate_to_minutes(start_time + timedelta(minutes=2))
-end_time = truncate_to_minutes(end_time - timedelta(minutes=2))
-print 'start_time, end_time = %s, %s' % (start_time, end_time)
-
-details = get_details(df)
-directory.save('details', details)
-
-
-
-def get_minute_counts(df):
+    
+def get_minute_counts(df, start_time, end_time):
     """Return a DataFrame whose index is 1 minute increments over the duration
         of df and whose values are the number of entries in df over each
         minute
     """
+    assert start_time < end_time
     bins = df.file.resample('1S', how='count', convention='center')
     # Empty means zero counts !
     bins = bins.fillna(0.0)
@@ -113,14 +92,36 @@ def get_minute_counts(df):
     assert not pd.isnull(bins).any()
     # Remove the ends so data is full 1-minutes bins aligned on whole minutes 
     bins = bins[start_time: end_time]
-    return bins    
+    return bins
+    
+        
+if False:        
+    def get_peak(counts):
+        """Retun the peak value in Series counts"""
+        if len(counts) == 0:
+            return None
+        return counts.indmax()    
+        # return counts.index[counts.argmax()]        
+        
+       
+start_time, end_time = df.index.min(), df.index.max()
+print 'orginal: start_time, end_time = %s, %s' % (start_time, end_time)
+
+# Start time and end time trunctated to whole minutes
+start_time = truncate_to_minutes(start_time + timedelta(minutes=2))
+end_time = truncate_to_minutes(end_time - timedelta(minutes=2))
+print 'cleaned: start_time, end_time = %s, %s' % (start_time, end_time)
+
+details = get_details(df)
+directory.save('details', details)
+  
     
 # The counts for each 1 minute bin
-minute_counts = get_minute_counts(df)
+minute_counts = get_minute_counts(df, start_time, end_time)
 print 'minute_counts: %s\n%s' % (type(minute_counts), minute_counts.describe())    
 print 'total entries: %s' % minute_counts.sum()
 
-level_counts = {level: get_minute_counts(df[df.level==level])
+level_counts = {level: get_minute_counts(df[df.level==level], start_time, end_time)
         for level in levels}
 
        
@@ -163,7 +164,8 @@ print 'entry_types: %s' % len(entry_types)
 #
 # Build the correlation table
 # 
-lfl_freq_dict = {s: get_minute_counts(df[(df.file==fl) & (df.line==ln)])
+lfl_freq_dict = {
+  s: get_minute_counts(df[(df.file==fl) & (df.line==ln)], start_time, end_time)
               for s,(lvl,fl,ln) in string_to_lfl.items()}
 lfl_freq = DataFrame(lfl_freq_dict, columns=string_to_lfl.keys())              
 directory.save('lfl_freq', lfl_freq)
