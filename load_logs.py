@@ -81,20 +81,19 @@ def decode_log_line_simple(line):
     try:    
         fl, ln_s = parts[3].split(':')
         ln = int(ln_s)
-    except:
+        return [parse_timestamp(' '.join(parts[:2])),
+                parts[2],
+                fl,
+                ln]  
+    except Exception as e:
         print
         print '!' * 80
+        print e
         print line[:100]
         print parts
         print parts[3]
         print '^' * 80
         return None
-    return [
-        parse_timestamp(' '.join(parts[:2])),
-        parts[2],
-        fl,
-        ln
-    ]    
 
     
 def decode_log_line(line):
@@ -135,16 +134,26 @@ def get_header_entries(log_file, extra):
                 else:
                     in_header = False
     return header, entries                
-           
+
     
 def log_file_to_df(log_file, extra):
-    """Returns a pandas dataframe whose rows are the decoded entries of the lines in log_file"""
+    """Returns a pandas DataFrame whose rows are the decoded entries of the lines in log_file"""
     # Why can't we construct a DataFrame with a generator?
     header, entries = get_header_entries(log_file, extra)
+    if not entries:
+        return None, None
     entry_keys = ENTRY_KEYS if extra else ENTRY_KEYS_SIMPLE
-    for e in entries:
-        assert len(e) == len(entry_keys), '\n%s\n%s'  % (e, entry_keys)
-    df = DataFrame(entries, columns=entry_keys)
+    for entry in entries:
+        assert len(entry) == len(entry_keys), '\n%s\n%s' % (entry, entry_keys)
+    try:        
+        df = DataFrame(entries, columns=entry_keys)
+    except Exception as e:
+        print 
+        print '!' * 80
+        print len(entries), type(entries[0])
+        print entry_keys
+        print '^' * 80
+        raise e
     del entries
     return header, df
 
@@ -165,6 +174,8 @@ def load_log(log_path, extra):
         The index of the DataFrame are the uniqufied timestamps of the log entries
     """
     header, df = log_file_to_df(log_path, extra)
+    if df is None:
+        return None, None
     make_timestamps_unique(df)
     df = df.set_index('timestamp')
     return header, df
@@ -207,8 +218,7 @@ class LogSaver:
         self.directory = ObjectDirectory(store_path)
         self.log_list = tuple(sorted(log_list))
         self.extra = extra
-        
-        #self.temp = LogSaver.temp_name(self.log_list, extra)
+
         self.history_path = self.directory.get_path(LogSaver.HISTORY, temp=True)
         self.progress_store_path = self.directory.get_path(LogSaver.PROGRESS, temp=True, is_df=True)
         self.store_path = self.directory.get_path(LogSaver.make_name(LogSaver.FINAL, extra), 
@@ -224,6 +234,9 @@ class LogSaver:
     def save_all_logs(self, force=False):
          
         if os.path.exists(self.store_path):
+            final_store = HDFStore(self.store_path)
+            print 'Keys: %s' % final_store
+            final_store.close()
             return
         if not force:
             assert not os.path.exists(self.history_path), '''
@@ -243,7 +256,16 @@ class LogSaver:
         print self.progress_store.keys()
         print '--------'
         
-        df_list = [self.progress_store.get(LogSaver.normalize(path)) for path in self.log_list]     
+        def get_log(path):
+            try:
+                return self.progress_store.get(LogSaver.normalize(path))
+            except Exception as e:
+                print
+                print path
+                raise e
+               
+        
+        df_list = [get_log(path) for path in self.log_list]     
         self.progress_store.close()
         print 'Closed %s' % self.progress_store_path
         
@@ -251,12 +273,13 @@ class LogSaver:
         print 'Final list has %d entries' % len(df_all)
         final_store = HDFStore(self.store_path)
         final_store.put('logs', df_all)
+        print 'Keys: %s' % final_store
         final_store.close()
         print 'Closed %s' % self.store_path
         
         # Save the history in a corresponding file
         self.directory.save('history', self.history)
-        print 'Closed %s' % self.store_path
+        print 'Saved history'
         
 
     def test_store(self):    
@@ -284,6 +307,9 @@ class LogSaver:
         print 'Processing %s' % path,
         start = time.time()
         header, df = load_log(path, extra=self.extra)
+        if df is None:
+            print 'Could not process %s' % path
+            return
         self.progress_store.put(LogSaver.normalize(path), df)
         load_time = time.time() - start
         
@@ -312,15 +338,27 @@ class LogSaver:
         path0 = sorted_keys[0]
         for path1 in sorted_keys[1:]:
             hist0,hist1 = history[path0],history[path1] 
-            assert hist0['end'] < hist1['start'], '\n%s %s\n%s %s' % (
-                path0, hist0, 
-                path1, hist1)    
+            assert hist0['end'] < hist1['start'] + DateOffset(microseconds=1000), '''
+            -----------
+            %s %s
+            start: %s
+            end  : %s
+            -----------
+            %s %s
+            hist1['start']
+            start: %s
+            end  : %s
+            ''' % (
+                path0, hist0, hist0['start'],  hist0['end'],
+                path1, hist1, hist1['start'],  hist1['end'])    
  
 
 def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, extra=False, 
                      number_files=-1):  
 
     path_list = glob.glob(path_pattern) 
+    
+    path_list = [path for path in path_list if not path.lower().endswith('.zip')]
     print path_list
     if not path_list:
         return
