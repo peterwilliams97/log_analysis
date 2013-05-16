@@ -15,7 +15,7 @@ from __future__ import division
 import re, sys, glob 
 import numpy as np
 import pandas as pd
-from pandas import DataFrame, Series, Timestamp, DateOffset
+from pandas import DataFrame, Series, Timestamp, DateOffset, HDFStore
 #import matplotlib as mpl
 from datetime import datetime, timedelta
 from collections import OrderedDict
@@ -39,8 +39,17 @@ if not options.path:
 directory = ObjectDirectory(options.path)
 print directory
 
-df = directory.load('logs.h5')
-print df
+hdf_path = directory.get_path('logs.h5', temp=False)
+print 'hdf_path: %s' % hdf_path
+
+store = HDFStore(hdf_path)
+print 'Keys: %s' % store.keys()
+print store
+store.close()
+df = pd.read_hdf(hdf_path, 'logs')
+
+#df = directory.load('logs.h5')
+print 'df: %s' % df
 
 if options.n_entries >= 0:
     df = df[:options.n_entries]

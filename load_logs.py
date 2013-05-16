@@ -2,7 +2,7 @@
 """
     Load PaperCut logs into a pandas DataFrame and store it in an HDF5 file.
 
-    Tested with pandas 0.11.0 or higher.
+    Tested with pandas 0.11.0r.
     
     e.g. 
         python load_logs.py -s -o out_dir -i in_dir\server.log*
@@ -49,7 +49,7 @@ def parse_timestamp(timestamp):
 PATTERN_LOG_LINE = r'''
     (?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(,\d{0,3})?)
     \s+
-    (?P<level>ERROR|INFO|DEBUG)
+    (?P<level>[A-Z]+)
     \s+
     (?P<file>\w+)
     :
@@ -67,7 +67,7 @@ RE_LOG_LINE = re.compile(PATTERN_LOG_LINE, re.IGNORECASE|re.DOTALL|re.VERBOSE)
 
 ENTRY_KEYS_SIMPLE = ENTRY_KEYS[:4]
 
-def decode_log_line_simple(line):
+def ___decode_log_line_simple(line):
     """ Return a parial list of the parts of a server.log line
         - date
         - time
@@ -112,6 +112,22 @@ def decode_log_line(line):
         d.get('content', '[EMPTY]')[:256],
         d.get('thread')
     ] 
+    
+    
+def decode_log_line_simple(line):
+    """ Return a list of the parts of a server.log line
+        See PATTERN_LOG_LINE for the parts
+    """
+    m = RE_LOG_LINE.search(line)
+    if not m:
+        return None
+    d = m.groupdict() 
+    return [
+        parse_timestamp(d.get('timestamp', '')),
+        d.get('level'),
+        d.get('file'),
+        int(d.get('line', '-1')),
+    ]     
 
 
 def get_header_entries(log_file, extra):
@@ -162,11 +178,22 @@ USEC = DateOffset(microseconds=1)
 
 def make_timestamps_unique(df):
     """Make all the timestamps in DataFrame df unique by making each
-        timestamp at least 1 µsec greater than timestamp of preceeding row
+        timestamp at least 1 µsec greater than timestamp of preceeding row.
+        Preserves first and last timestamp.
     """
-    for i in range(1, len(df)):
+    # Prevent first timestamp in this log overlapping last timestamp in previous log
+    df.ix[0,'timestamp'] += USEC 
+    
+    for i in range(1, len(df)-1):
         if df.ix[i,'timestamp'] <= df.ix[i-1,'timestamp']:
             df.ix[i,'timestamp'] = df.ix[i-1,'timestamp'] + USEC
+            
+    # Deal with the case where the last timestamp moved 
+    for i in range(len(df)-1,1,-1):
+        if df.ix[i,'timestamp'] > df.ix[i-1,'timestamp']:
+            # Got a strictly increasing run. Done
+            break
+        df.ix[i-1,'timestamp'] = df.ix[i,'timestamp'] - USEC
 
 
 def load_log(log_path, extra):
@@ -338,7 +365,7 @@ class LogSaver:
         path0 = sorted_keys[0]
         for path1 in sorted_keys[1:]:
             hist0,hist1 = history[path0],history[path1] 
-            assert hist0['end'] < hist1['start'] + DateOffset(microseconds=1000), '''
+            assert hist0['end'] < hist1['start'], '''
             -----------
             %s %s
             start: %s
@@ -353,8 +380,7 @@ class LogSaver:
                 path1, hist1, hist1['start'],  hist1['end'])    
  
 
-def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, extra=False, 
-                     number_files=-1):  
+def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, extra=False, n_files=-1):  
 
     path_list = glob.glob(path_pattern) 
     
@@ -363,8 +389,8 @@ def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, extra=Fal
     if not path_list:
         return
 
-    if number_files >= 0:
-        path_list = path_list[:number_files]
+    if n_files >= 0:
+        path_list = path_list[:n_files]
 
     log_saver = LogSaver(hdf_path, path_list, extra=extra)
     print
@@ -373,6 +399,8 @@ def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, extra=Fal
     if clean:
         print 'Cleaning temp files'
         log_saver.cleanup()
+        
+    log_saver.directory.save('args', {'path_pattern':path_pattern, 'n_files':n_files})    
     log_saver.save_all_logs(force=force)
 
 
@@ -392,7 +420,7 @@ def main():
             help='Delete the in-progress (temp) files for this processing session.')        
     parser.add_option('-e', '--extra', dest='extra', action='store_true', default=False, 
             help='Extra information mode. Stores log content and thread id')
-    parser.add_option('-n', '--number-files', dest='number_files', type='int', default=-1, 
+    parser.add_option('-n', '--number-files', dest='n_files', type='int', default=-1, 
             help='Max number of log files to process')            
     options, args = parser.parse_args()
 
@@ -403,7 +431,7 @@ def main():
         exit()
  
     load_log_pattern(options.hdf_path, options.path_pattern, force=options.force,
-            clean=options.clean, extra=options.extra, number_files=options.number_files)
+            clean=options.clean, extra=options.extra, n_files=options.n_files)
 
 
 if __name__ == '__main__':
