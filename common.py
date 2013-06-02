@@ -105,7 +105,7 @@ class ObjectDirectory:
             os.makedirs(dir)
         self.dirs.append(dir)
 
-    def get_dir(self, temp):
+    def get_dir(self, temp=False):
         dir = os.path.join(ObjectDirectory.ROOT, self.name)
         if temp:
             dir = os.path.join(dir, 'temp')

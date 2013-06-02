@@ -323,6 +323,9 @@ class LogSaver:
     def cleanup(self): 
         os.remove(self.progress_store_path)
         os.remove(self.history_path)
+        
+    def delete(self):
+        os.remove(self.store_path)
 
     def save_log(self, path):
         """Return a pandas DataFrame for all the valid log entry lines in log_file
@@ -382,8 +385,9 @@ class LogSaver:
 
 def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, extra=False, n_files=-1):  
 
-    path_list = glob.glob(path_pattern) 
+    print path_pattern
     
+    path_list = glob.glob(path_pattern) 
     path_list = [path for path in path_list if not path.lower().endswith('.zip')]
     print path_list
     if not path_list:
@@ -400,7 +404,7 @@ def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, extra=Fal
         print 'Cleaning temp files'
         log_saver.cleanup()
         
-    log_saver.directory.save('args', {'path_pattern':path_pattern, 'n_files':n_files})    
+    log_saver.directory.save('args', {'path_pattern': path_pattern, 'n_files': n_files})    
     log_saver.save_all_logs(force=force)
 
 

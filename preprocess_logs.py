@@ -16,56 +16,9 @@ import re, sys, glob
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series, Timestamp, DateOffset, HDFStore
-#import matplotlib as mpl
 from datetime import datetime, timedelta
 from collections import OrderedDict
-from common import ObjectDirectory
-import optparse
-
-parser = optparse.OptionParser('python %s [options]' % sys.argv[0])
-parser.add_option('-i', '--path', dest='path', default=None, 
-        help='Saved log file directory')      
-parser.add_option('-n', '--number-entries', dest='n_entries', type='int', default=-1, 
-            help='Number of log entries to process')         
-options, args = parser.parse_args()
-
-if not options.path:
-    print '    Usage: %s' % parser.usage
-    print __doc__
-    print '    --help for more information'
-    exit()
- 
-
-directory = ObjectDirectory(options.path)
-print directory
-
-hdf_path = directory.get_path('logs.h5', temp=False)
-print 'hdf_path: %s' % hdf_path
-
-store = HDFStore(hdf_path)
-print 'Keys: %s' % store.keys()
-print store
-store.close()
-df = pd.read_hdf(hdf_path, 'logs')
-
-#df = directory.load('logs.h5')
-print 'df: %s' % df
-
-if options.n_entries >= 0:
-    df = df[:options.n_entries]
-
-secs = (df.index.max() - df.index.min()).total_seconds()
-hours = secs/3600
-levels = df.level.unique()
-
-print '%.1f hours of logs' % hours
-
-print '%d log entries/hour' % int(len(df)/hours)
-print '%.1f thousand log entries/hour' % (int(len(df)/hours)/1000.0)
-print df.shape, df.columns
-for level in levels:
-    print '%-5s : %5d' % (level, len(df[df.level==level]))
-print 'df : %s' % str(df.shape)
+from common import ObjectDirectory, versions
 
 
 def truncate_to_minutes(timestamp):
@@ -102,120 +55,138 @@ def get_minute_counts(df, start_time, end_time):
     # Remove the ends so data is full 1-minutes bins aligned on whole minutes 
     bins = bins[start_time: end_time]
     return bins
-    
+
+
+def preprocess(directory, n_entries):
+
+    hdf_path = directory.get_path('logs.h5', temp=False)
+    print 'hdf_path: %s' % hdf_path
+
+    store = HDFStore(hdf_path)
+    print 'Keys: %s' % store.keys()
+    print store
+    store.close()
+    df = pd.read_hdf(hdf_path, 'logs')
+
+    #df = directory.load('logs.h5')
+    print 'df: %s' % df
+
+    if n_entries >= 0:
+        df = df[:n_entries]
+
+    secs = (df.index.max() - df.index.min()).total_seconds()
+    hours = secs/3600
+    levels = df.level.unique()
+
+    print '%.1f hours of logs' % hours
+
+    print '%d log entries/hour' % int(len(df)/hours)
+    print '%.1f thousand log entries/hour' % (int(len(df)/hours)/1000.0)
+    print df.shape, df.columns
+    for level in levels:
+        print '%-5s : %5d' % (level, len(df[df.level==level]))
+    print 'df : %s' % str(df.shape)
+
+    if False:        
+        def get_peak(counts):
+            """Retun the peak value in Series counts"""
+            if len(counts) == 0:
+                return None
+            return counts.indmax()    
+            # return counts.index[counts.argmax()]        
+
+            
+    start_time, end_time = df.index.min(), df.index.max()
+    print 'orginal: start_time, end_time = %s, %s' % (start_time, end_time)
+
+    # Start time and end time trunctated to whole minutes
+    start_time = truncate_to_minutes(start_time + timedelta(minutes=2))
+    end_time = truncate_to_minutes(end_time - timedelta(minutes=2))
+    print 'cleaned: start_time, end_time = %s, %s' % (start_time, end_time)
+
+    details = get_details(df)
+    directory.save('details', details)
         
-if False:        
-    def get_peak(counts):
-        """Retun the peak value in Series counts"""
-        if len(counts) == 0:
-            return None
-        return counts.indmax()    
-        # return counts.index[counts.argmax()]        
+    # The counts for each 1 minute bin
+    minute_counts = get_minute_counts(df, start_time, end_time)
+    print 'minute_counts: %s\n%s' % (type(minute_counts), minute_counts.describe())    
+    print 'total entries: %s' % minute_counts.sum()
+
+    level_counts = {level: get_minute_counts(df[df.level==level], start_time, end_time)
+            for level in levels}
+ 
+    #level_peaks = {level: get_peak(level_counts[level])  for level in levels}  
+    # print 'level_peaks: %s' % level_peaks     
+
+    if False:
+        unique_files = df.file.unique()
+        print '%d source files' % len(unique_files)
+        for i, fl in enumerate(sorted(unique_files)[:5]):
+            print '%3d: %s' % (i, fl)
+
+        directory.save('unique_files', unique_files)    
         
-       
-start_time, end_time = df.index.min(), df.index.max()
-print 'orginal: start_time, end_time = %s, %s' % (start_time, end_time)
+    #
+    # Get all the unique log messages
+    #
+    level_file_line = df.groupby(['level', 'file', 'line'])
+    lfl_size = level_file_line.size()
+    lfl_sorted = lfl_size.order(ascending=False)
+    print 'lfl_sorted: %s' % str(lfl_sorted.shape)
 
-# Start time and end time trunctated to whole minutes
-start_time = truncate_to_minutes(start_time + timedelta(minutes=2))
-end_time = truncate_to_minutes(end_time - timedelta(minutes=2))
-print 'cleaned: start_time, end_time = %s, %s' % (start_time, end_time)
+    #directory.save('level_file_line', tuple(level_file_line)) 
+    directory.save('lfl_sorted', lfl_sorted)
 
-details = get_details(df)
-directory.save('details', details)
-  
-    
-# The counts for each 1 minute bin
-minute_counts = get_minute_counts(df, start_time, end_time)
-print 'minute_counts: %s\n%s' % (type(minute_counts), minute_counts.describe())    
-print 'total entries: %s' % minute_counts.sum()
+    # file:line uniquely identifies each level,file,line
+    # Construct mappings in both directions
+    lfl_to_string = OrderedDict(((lvl,fl,ln), '%s:%d' % (fl,ln)) for lvl,fl,ln in lfl_sorted.index)
+    string_to_lfl = OrderedDict(('%s:%d' % (fl,ln), (lvl,fl,ln)) for lvl,fl,ln in lfl_sorted.index)
+    print 'string_to_lfl: %s' % len(string_to_lfl)
 
-level_counts = {level: get_minute_counts(df[df.level==level], start_time, end_time)
-        for level in levels}
+    # [((level,file,line),count)] sorted by count in descending order
+    entry_types_list = zip(lfl_sorted.index, lfl_sorted)
 
-       
-#level_peaks = {level: get_peak(level_counts[level])  for level in levels}  
-# print 'level_peaks: %s' % level_peaks     
+    # {(level,file,line) : count}
+    entry_types = OrderedDict(entry_types_list)
+    directory.save('entry_types', entry_types)
+    print 'entry_types: %s' % len(entry_types)
 
-if False:
-    unique_files = df.file.unique()
-    print '%d source files' % len(unique_files)
-    for i, fl in enumerate(sorted(unique_files)[:5]):
-        print '%3d: %s' % (i, fl)
+    #
+    # Build the correlation table
+    # 
+    lfl_freq_dict = {
+        s: get_minute_counts(df[(df.file==fl) & (df.line==ln)], start_time, end_time)
+                  for s,(lvl,fl,ln) in string_to_lfl.items()}
+    lfl_freq = DataFrame(lfl_freq_dict, columns=string_to_lfl.keys())              
+    directory.save('lfl_freq', lfl_freq)
 
-    directory.save('unique_files', unique_files)    
-    
-#
-# Get all the unique log messages
-#
-level_file_line = df.groupby(['level', 'file', 'line'])
-lfl_size = level_file_line.size()
-lfl_sorted = lfl_size.order(ascending=False)
-print 'lfl_sorted: %s' % str(lfl_sorted.shape)
-
-#directory.save('level_file_line', tuple(level_file_line)) 
-directory.save('lfl_sorted', lfl_sorted)
-
-# file:line uniquely identifies each level,file,line
-# Construct mappings in both directions
-lfl_to_string = OrderedDict(((lvl,fl,ln), '%s:%d' % (fl,ln)) for lvl,fl,ln in lfl_sorted.index)
-string_to_lfl = OrderedDict(('%s:%d' % (fl,ln), (lvl,fl,ln)) for lvl,fl,ln in lfl_sorted.index)
-print 'string_to_lfl: %s' % len(string_to_lfl)
-
-# [((level,file,line),count)] sorted by count in descending order
-entry_types_list = zip(lfl_sorted.index, lfl_sorted)
-
-# {(level,file,line) : count}
-entry_types = OrderedDict(entry_types_list)
-directory.save('entry_types', entry_types)
-print 'entry_types: %s' % len(entry_types)
-
-#
-# Build the correlation table
-# 
-lfl_freq_dict = {
-  s: get_minute_counts(df[(df.file==fl) & (df.line==ln)], start_time, end_time)
-              for s,(lvl,fl,ln) in string_to_lfl.items()}
-lfl_freq = DataFrame(lfl_freq_dict, columns=string_to_lfl.keys())              
-directory.save('lfl_freq', lfl_freq)
-
-lfl_freq_corr = lfl_freq.corr()
-directory.save('lfl_freq_corr', lfl_freq_corr)
-print 'lfl_freq_corr: %s' % str(lfl_freq_corr.shape)
-
-if False:
-
-    # How correlated are the frequencies of the log messages?
-    # for lvl, fl, ln in entry_types.keys():
-     
-    NUM_ENTRY_TYPES = 1000
-
-    lfl_rolling_sums = []
-    for lvl, fl, ln in entry_types.keys()[:NUM_ENTRY_TYPES]:
-        entries = df_whole_minutes[(df_whole_minutes.file==fl) & (df_whole_minutes.line==ln)]
-        minute_counts = get_minute_counts(entries)
-        lfl_rolling_sums.append(((lvl,fl,ln), minute_counts)) 
-
-    # The uncorrelated log messages
-    CORR_THRESH = 0.9
-
-    uncorrelated = OrderedDict()
-    key,rs = lfl_rolling_sums[0]
-    uncorrelated[key] = rs, 0.0
-    for key,rs in lfl_rolling_sums[1:]:
-        corr = max(rs.corr(x) for x,_ in uncorrelated.values())
-        if corr < CORR_THRESH:
-            uncorrelated[key] = rs, corr
-
-    uncorr_details = { (lvl,fl,ln) : (corr, df[(df.file==fl) & (df.line==ln)].file.count())
-        for (lvl,fl,ln),(rs,corr) in uncorrelated.items()
-    }
-    print 'uncorr_details=%s' % uncorr_details
-
-    uncorr_details_list = sorted(uncorr_details.items(), key=lambda x: -x[1][1])
-    print 'uncorr_details_list' 
-    for x in uncorr_details_list:
-        print x
-        
+    lfl_freq_corr = lfl_freq.corr()
+    directory.save('lfl_freq_corr', lfl_freq_corr)
+    print 'lfl_freq_corr: %s' % str(lfl_freq_corr.shape)
 
 
+def main():
+    import optparse
+
+    parser = optparse.OptionParser('python %s [options]' % sys.argv[0])
+    parser.add_option('-i', '--path', dest='path', default=None, 
+            help='Saved log file directory')      
+    parser.add_option('-n', '--number-entries', dest='n_entries', type='int', default=-1, 
+            help='Number of log entries to process')         
+    options, args = parser.parse_args()
+
+    if not options.path:
+        print '    Usage: %s' % parser.usage
+        print __doc__
+        print '    --help for more information'
+        exit()
+
+    directory = ObjectDirectory(options.path)
+    print directory
+
+    preprocess(directory, n_entries)
+
+if __name__ == '__main__':
+    versions()
+    main()
+ 
