@@ -34,26 +34,36 @@ def get_details(df):
         'count': df.count()
     }    
     
+# 1 sample/minute for a day    
+MAX_SAMPLES = 24 * 60    
     
 def get_minute_counts(df, start_time, end_time):
     """Return a DataFrame whose index is 1 minute increments over the duration
         of df and whose values are the number of entries in df over each
         minute
     """
+    print ' get_minute_counts %s %s %d' % (start_time, end_time, len(df)), 
     assert start_time < end_time
-    bins = df.file.resample('1S', how='count', convention='center')
+    duration = end_time - start_time
+    period_min = max(1, duration.total_seconds()/60/MAX_SAMPLES)
+    base_sec = int(period_min * 20.0)
+    sample_sec = int(period_min * 60.0)
+    print 'duration=%s,base_sec=%d,sample_sec=%d' % (duration, base_sec, sample_sec),
+    
+    bins = df.file.resample('%dS' % base_sec, how='count', convention='center')
     # Empty means zero counts !
     bins = bins.fillna(0.0)
     # Smooth by 2 bin widths
-    bins = pd.rolling_mean(bins, 120, center=True)
+    bins = pd.rolling_mean(bins, 6, center=True)
     # Get the 1 minute bins
-    bins = bins.resample('60S', how='sum', convention='center')  
+    bins = bins.resample('%dS' % sample_sec, how='sum', convention='center')  
     # Empty means zero counts !
     bins = bins.fillna(0.0)
     # All the NaNs should have been converted to zeros
     assert not pd.isnull(bins).any()
     # Remove the ends so data is full 1-minutes bins aligned on whole minutes 
     bins = bins[start_time: end_time]
+    print '>>'
     return bins
 
 
@@ -154,9 +164,13 @@ def preprocess(directory, n_entries):
     #
     # Build the correlation table
     # 
+    threshold = min(100, len(df)//1000)
     lfl_freq_dict = {
         s: get_minute_counts(df[(df.file==fl) & (df.line==ln)], start_time, end_time)
-                  for s,(lvl,fl,ln) in string_to_lfl.items()}
+            for s,(lvl,fl,ln) in string_to_lfl.items()
+                if len(df[(df.file==fl) & (df.line==ln)]) >= threshold
+    }
+    print '++++'
     lfl_freq = DataFrame(lfl_freq_dict, columns=string_to_lfl.keys())              
     directory.save('lfl_freq', lfl_freq)
 

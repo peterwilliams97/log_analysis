@@ -251,6 +251,7 @@ class LogSaver:
         self.store_path = self.directory.get_path(LogSaver.make_name(LogSaver.FINAL, extra), 
                             is_df=True)
         self.history = ObjectDirectory.load_object(self.history_path, {})
+        self.saved = False
         
     def __repr__(self):
         return '\n'.join('%s: %s' % (k,v) for k,v in self.__dict__.items())
@@ -307,6 +308,8 @@ class LogSaver:
         # Save the history in a corresponding file
         self.directory.save('history', self.history)
         print 'Saved history'
+        
+        self.saved = True
         
 
     def test_store(self):    
@@ -388,10 +391,12 @@ def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, extra=Fal
     print path_pattern
     
     path_list = glob.glob(path_pattern) 
-    path_list = [path for path in path_list if not path.lower().endswith('.zip')]
+    path_list = [path for path in path_list 
+                    if not path.lower().endswith('.zip')
+                        and path.lower().count('log') == 1]
     print path_list
     if not path_list:
-        return
+        return False
 
     if n_files >= 0:
         path_list = path_list[:n_files]
@@ -406,6 +411,8 @@ def load_log_pattern(hdf_path, path_pattern, force=False, clean=False, extra=Fal
         
     log_saver.directory.save('args', {'path_pattern': path_pattern, 'n_files': n_files})    
     log_saver.save_all_logs(force=force)
+    
+    return log_saver.saved
 
 
 def main():
