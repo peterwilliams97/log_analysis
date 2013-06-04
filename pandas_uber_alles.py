@@ -12,10 +12,12 @@ from common import ObjectDirectory, versions
 import load_logs
 import preprocess_logs
 
-PPRINT = pprint.PrettyPrinter(indent=4)
+
+
+PPRINTER = pprint.PrettyPrinter(indent=4)
 
 def pprint(obj):
-    PPRINT.pprint(obj)
+    PPRINTER.pprint(obj)
 
     
 RE_BUG_ID = re.compile(r'[A-Z]{3}-\d{3}-\d{5}')
@@ -25,7 +27,9 @@ def get_ids_dirs_logs(top_dir, min_logs):
     
     print top_dir, min_logs
     
-    if False and os.path.exists('dirs.pkl'):
+    # dirs => hash of mask full path
+    
+    if os.path.exists('dirs.pkl'):
         dirs = pickle.load(open('dirs.pkl', 'rb'))
         print 'got pickle'
     else:
@@ -93,7 +97,11 @@ def process_dir(param):
 
     directory = ObjectDirectory(hdf_path)
     print directory.get_dir()
-    
+
+    if os.path.exists(directory.get_path('lfl_freq_corr.h5')):
+        print '%s exists' %directory.get_path('lfl_freq_corr.h5')
+        return True
+        
     try:
         shutil.rmtree(directory.get_dir())
     except:
@@ -102,7 +110,12 @@ def process_dir(param):
     path_pattern = os.path.join(dir, 'server.log*')
 
     if load_logs.load_log_pattern(hdf_path, path_pattern, n_files=n_files):
-        preprocess_logs.preprocess(directory, n_entries=n_entries)
+        preprocess_logs.preprocess(directory, n_entries=n_entries)  
+    else:
+        try:
+            shutil.rmtree(directory.get_dir())
+        except:
+            pass
 
     try:
         shutil.rmtree(directory.get_dir(temp=True))
@@ -110,7 +123,7 @@ def process_dir(param):
         pass
 
     try:    
-        directory.get_path('logs.h5')
+        os.remove(directory.get_path('logs.h5'))
     except:
         pass
 
